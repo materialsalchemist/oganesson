@@ -1,5 +1,11 @@
 ## Changelog
 
+
+### 0.1.44 - 2024-12-16
+
+* Added the get_ferwe_ferdo() function to oganesson.io.vasp
+* For DGL, only import it if it is already installed.
+
 ### 0.1.43 - 2024-09-30
 
 * Fix for Xdatcar reader

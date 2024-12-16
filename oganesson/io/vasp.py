@@ -4,6 +4,7 @@ from pymatgen.io.vasp import Poscar as MPPoscar
 import numpy as np
 from ase import Atoms
 from ase.cell import Cell
+from sympy import flatten
 
 
 class Poscar:
@@ -201,6 +202,108 @@ class Outcar:
         print("Maximum force =", forces.max())
         return forces.max()
 
+    def get_bands(self):
+        """
+        Returns the electronic occupations from the OUTCAR files.
+        """
+        outcarf = open(self.outcar_directory + "/" + self.outcar_file)
+        outcar = outcarf.readlines()
+        outcarf.close()
+
+        for i in range(len(outcar)):
+            l = outcar[i]
+            if "Found" in l and "irreducible k-points:" in l:
+                break
+        l = l.split()
+        num_k_points = int(l[1])
+        for i in range(len(outcar)):
+            l = outcar[i]
+            if "number of bands    NBANDS=" in l:
+                break
+        l = l.split("number of bands    NBANDS=")
+        num_bands = int(l[1])
+        print("og:This OUTCAR has", num_bands, "bands and", num_k_points, "k points")
+
+        # Get the last " spin component" line in the file
+        for i in range(len(outcar) - 1, 0, -1):
+            if (
+                outcar[i].startswith(" spin component 1")
+                and "k-point     1" in outcar[i + 2]
+            ):
+                break
+        print("og:Starting at line", i + 1)
+        bands = np.ndarray([2, num_k_points, num_bands, 2])
+        while i < len(outcar):
+            if outcar[i].startswith(" spin component"):
+                s = outcar[i].split()
+                s = int(s[2]) - 1
+                i += 2
+                for k in range(num_k_points):
+                    kp = outcar[i].split()
+                    # print(kp)
+                    kp = int(kp[1]) - 1
+                    i += 2
+                    for j in range(num_bands):
+                        n = outcar[i].split()[1:]
+                        n = [float(x) for x in n]
+                        bands[s][kp][j][0] = n[0]
+                        bands[s][kp][j][1] = n[1]
+                        i += 1
+                    i += 1
+            if s == 1:
+                break
+        return bands
+
+    def get_ferwe_ferdo(self, transition_from=0, transition_to=0):
+        """
+        Generates the values of the FERWE and FERDO tags in the VASP INCAR files for the transition assigned by the arguments `transition_from` and `transition_to`.
+
+        Assumptions:
+        - Transitions are assumed to conserve spin. Only spin-up transitions are supported.
+        - Occupation numbers must either be 1 or 0.
+
+        transition_from: the source of the electron, counting 0 for the HOMO orbital, 1 for HOMO-1, etc.
+        transition_to: the destination of the electron, counting 0 for the LUMO orbital, 1 for LUMO+1, etc.
+        """
+        bands = self.get_bands()
+        occ = []
+
+        occ = flatten(bands[:, :, :, 1])
+        occ = [round(x, 2) for x in occ]
+        if len(set(occ)) > 2:
+            raise Exception("og:Occupation numbers must either be 1 or 0.")
+
+        filled_up = (bands[0, 0, :, 1] == 1).sum()
+        empty_up = (bands[0, 0, :, 1] == 0).sum()
+        filled_down = (bands[1, 0, :, 1] == 1).sum()
+        empty_down = (bands[1, 0, :, 1] == 0).sum()
+        print(
+            "og:Number of filled/empty states:",
+            filled_up,
+            empty_up,
+            filled_down,
+            empty_down,
+        )
+
+        num_k_points, num_bands = bands.shape[1:3]
+
+        FERWE = ""
+        FERDO = ""
+        for k in range(num_k_points):
+            FERWE += (
+                str(filled_up - transition_from - 1)
+                + "*1.0 "
+                + str(transition_from + 1)
+                + "*0.0 "
+                + transition_to * "0*0.0 "
+                + str(transition_to + 1)
+                + "*1.0 "
+                + str(empty_up - transition_to - 1)
+                + "*0.0 "
+            )
+            FERDO += str(filled_down) + "*1.0 " + str(empty_down) + "*0.0 "
+        return FERWE, FERDO
+
 
 def string_to_ase(poscar_str, convert=1):
     poscar = MPPoscar.from_str(poscar_str)
@@ -233,8 +336,8 @@ class Xdatcar:
         self,
         directory: str = "./",
         filename="XDATCAR",
-        run_type: str="md",
-        skip = 1,
+        run_type: str = "md",
+        skip=1,
     ) -> None:
         self.directory = directory
         if isinstance(filename, str):
@@ -250,32 +353,46 @@ class Xdatcar:
             number_of_lines = num_atoms
             if run_type == "opt":
                 trajectory = traj
-                tot_num_images = int(len(trajectory) / (number_of_lines+8))
+                tot_num_images = int(len(trajectory) / (number_of_lines + 8))
 
-                print("file: ", self.filename, "total number of images:", str(tot_num_images))
+                print(
+                    "file: ",
+                    self.filename,
+                    "total number of images:",
+                    str(tot_num_images),
+                )
 
                 trajectory_list_ang = []
 
                 for i in range(0, tot_num_images):
                     positions_str = "".join(
-                        traj[8*(i+1) + i * (num_atoms) : 8*(i+1) + (i + 1) * (num_atoms)]
+                        traj[
+                            8 * (i + 1)
+                            + i * (num_atoms) : 8 * (i + 1)
+                            + (i + 1) * (num_atoms)
+                        ]
                     )
                     a_ang = string_to_ase(lattice_str + positions_str)
                     trajectory_list_ang += [a_ang]
 
             else:
                 trajectory = traj[7:]
-                tot_num_images = int(len(trajectory) / (number_of_lines+1))
+                tot_num_images = int(len(trajectory) / (number_of_lines + 1))
 
-                print("file: ", self.filename, "total number of images:", str(tot_num_images))
+                print(
+                    "file: ",
+                    self.filename,
+                    "total number of images:",
+                    str(tot_num_images),
+                )
 
                 trajectory_list_ang = []
 
                 for i in range(0, tot_num_images):
-                    positions = traj[7 + i * (num_atoms + 1) : 7 + (i + 1) * (num_atoms + 1)]
-                    positions_str = "".join(
-                        positions[1:]
-                    )
+                    positions = traj[
+                        7 + i * (num_atoms + 1) : 7 + (i + 1) * (num_atoms + 1)
+                    ]
+                    positions_str = "".join(positions[1:])
                     a_ang = string_to_ase(lattice_str + positions_str)
                     trajectory_list_ang += [a_ang]
             self.trajectory = trajectory_list_ang
@@ -294,31 +411,45 @@ class Xdatcar:
                 number_of_lines = num_atoms
                 if run_type == "opt":
                     trajectory = traj
-                    tot_num_images = int(len(trajectory) / (number_of_lines+8))
-                    print("file: ", filename, "total number of images:", str(tot_num_images))
+                    tot_num_images = int(len(trajectory) / (number_of_lines + 8))
+                    print(
+                        "file: ",
+                        filename,
+                        "total number of images:",
+                        str(tot_num_images),
+                    )
                     for i in range(0, tot_num_images):
                         positions_str = "".join(
-                            traj[8*(i+1) + i * (num_atoms) : 8*(i+1) + (i + 1) * (num_atoms)]
+                            traj[
+                                8 * (i + 1)
+                                + i * (num_atoms) : 8 * (i + 1)
+                                + (i + 1) * (num_atoms)
+                            ]
                         )
                         a_ang = string_to_ase(lattice_str + positions_str)
                         trajectory_list_ang += [a_ang]
                 else:
                     trajectory = traj[7:]
-                    tot_num_images = int(len(trajectory) / (number_of_lines+1))
-                    print("file: ", filename, "total number of images:", str(tot_num_images))
+                    tot_num_images = int(len(trajectory) / (number_of_lines + 1))
+                    print(
+                        "file: ",
+                        filename,
+                        "total number of images:",
+                        str(tot_num_images),
+                    )
                     for i in range(0, tot_num_images):
-                        positions = traj[7 + i * (num_atoms + 1) : 7 + (i + 1) * (num_atoms + 1)]
-                        positions_str = "".join(
-                            positions[1:]
-                        )
+                        positions = traj[
+                            7 + i * (num_atoms + 1) : 7 + (i + 1) * (num_atoms + 1)
+                        ]
+                        positions_str = "".join(positions[1:])
                         a_ang = string_to_ase(lattice_str + positions_str)
                         trajectory_list_ang += [a_ang]
-            
+
             self.trajectory = []
             for ti in range(len(trajectory_list_ang)):
-                if ti%skip == 0:
-                    self.trajectory += [trajectory_list_ang[ti]]        
-            
+                if ti % skip == 0:
+                    self.trajectory += [trajectory_list_ang[ti]]
+
     def get_trajectory(self):
         return self.trajectory
 

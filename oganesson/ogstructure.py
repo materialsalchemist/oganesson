@@ -1,5 +1,5 @@
 import numpy as np
-from ase.neb import NEB
+from ase.mep.neb import NEB
 import os
 import math
 from ase.io import read
@@ -14,24 +14,26 @@ from ase import Atoms, Atom
 from ase.cell import Cell
 from pymatgen.core import Structure, Element
 from bsym.interface.pymatgen import unique_structure_substitutions
-from matgl.ext.ase import Relaxer
 from pymatgen.io.cif import CifParser
 from pymatgen.core import Lattice
-import matgl
 from diffusivity.diffusion_coefficients import DiffusionCoefficient
 from ase.md.md import Trajectory
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
 from pymatgen.util.coord import pbc_shortest_vectors
-from m3gnet.graph._compute import *
-from m3gnet.graph._converters import RadiusCutoffGraphConverter
-from sympy import integrate, cos, pi, sqrt, symbols, solve, sin
-from matgl.ext.ase import MolecularDynamics
+from sympy import cos, pi, sqrt, sin
 from oganesson.utilities import epsilon
 from oganesson.utilities.constants import F
 from oganesson.utilities.bonds_dictionary import bonds_dictionary
 from oganesson.utilities import atomic_data
-from ase.constraints import FixAtoms, ExternalForce
+from ase.constraints import FixAtoms
 from ase import units
+
+try:
+    import matgl
+    from matgl.ext.ase import Relaxer
+    from matgl.ext.ase import MolecularDynamics
+except ModuleNotFoundError:
+    print("og:matgl is not installed.")
 
 
 class OgStructure:
@@ -471,7 +473,7 @@ class OgStructure:
             potential = matgl.load_model(model)
             print("og:Loaded PES model:", model)
             potential.calc_stresses = True
-        
+
         relaxer = Relaxer(potential=potential, relax_cell=relax_cell)
         atoms = self.pymatgen_to_ase(self.structure)
         if fix_atoms_indices is not None:
@@ -486,6 +488,33 @@ class OgStructure:
         self.relaxation_time = end - start
 
         return self
+
+    def generate_neb_images(
+        self, final_structure, frozen_atoms, num_images=5, model="diep", folder_tag=None
+    ):
+        if folder_tag is not None:
+            neb_folder = "neb_path_" + folder_tag
+        else:
+            neb_folder = "neb_path"
+        initial = self.to_ase()
+        final = final_structure.to_ase()
+        self.images = [initial]
+        self.images += [initial.copy() for i in range(num_images)]
+        self.images += [final]
+        self.neb = NEB(self.images)
+        os.mkdir(neb_folder)
+        self.neb.interpolate(mic=True)
+        for i in range(len(self.images)):
+            self.images[i] = OgStructure(self.images[i])
+            # self.images[i] = self.images[i].relax(model=model)
+            image_str = self.images[i].structure.to(fmt="poscar")
+            os.mkdir(neb_folder + "/" + str(i).zfill(2))
+            f = open(neb_folder + "/" + str(i).zfill(2) + "/POSCAR", "w")
+            f.write(image_str)
+            f.close()
+            f = open(neb_folder + "/" + str(i).zfill(2) + ".vasp", "w")
+            f.write(image_str)
+            f.close()
 
     def generate_neb(
         self,
@@ -1069,14 +1098,9 @@ class OgStructure:
         write_intermediate=False,
         intermediates_folder="./",
         model="diep",
-        method: Union[
-            "opt_lattice_expansion",
-            "opt_pulling",
-            "opt_pulling_expansion",
-            "md_pulling",
-        ] = "opt_pulling_expansion",
+        method="opt_pulling_expansion",
         freeze_size=3,
-        freeze_method: Union["sample", "all", "distribution"] = "all",
+        freeze_method="all",
         fmax=0.05,
         relaxation_steps=1000,
     ):
@@ -1568,13 +1592,6 @@ class OgStructure:
         for a in self.structure:
             m += a.specie.atomic_mass
         return m
-
-    def get_graph(self):
-        """Converts the structure into a graph using the M3GNET tensorflow implementation"""
-        r = RadiusCutoffGraphConverter()
-        mg = r.convert(self.structure)
-        graph = tf_compute_distance_angle(mg.as_list())
-        return graph
 
     def calculate_theoretical_capacity(self, charge_carrier: str, n=None):
         """
