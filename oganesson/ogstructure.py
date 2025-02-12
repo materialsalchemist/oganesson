@@ -339,6 +339,87 @@ class OgStructure:
             ii += 1
         return False
 
+    def add_molecule_to_surface(self, m: Atoms, m_centre_atom=None, max_trials=1000):
+        s = self.to_ase()
+        s.positions[:, 2] = s.positions[:, 2] - s.positions[:, 2].min()
+        nudge = np.array([0.0, 0.0, 0.0])
+        
+        ii = 0
+        history = ""
+        do_leap = False
+        while ii < max_trials:
+            s1 = s
+            s1_thickness = s1.positions[:, 2].max() - s1.positions[:, 2].min()
+            if m_centre_atom is None:
+                m = OgStructure(m).center().zero_z().to_ase()
+            else:
+                m = OgStructure(m).center(m_centre_atom).zero_z().to_ase()
+
+            if do_leap:
+                m.positions += np.array(
+                    [
+                        s.cell.cellpar()[0] * np.random.random(),
+                        s.cell.cellpar()[1] * np.random.random(),
+                        nudge[2] + s1_thickness + 2.5 / 2,
+                    ]
+                )
+                atom = Atoms(
+                    positions=m.positions,
+                    pbc=True,
+                    cell=s.cell,
+                    symbols=m.symbols,
+                )
+            else:
+                m.positions += np.array(
+                    [
+                        s.cell.cellpar()[0] / 2 + nudge[0],
+                        s.cell.cellpar()[1] / 2 + nudge[1],
+                        nudge[2] + s1_thickness + 2.5 / 2,
+                    ]
+                )
+                atom = Atoms(
+                    positions=m.positions,
+                    pbc=True,
+                    cell=s.cell,
+                    symbols=m.symbols,
+                )
+            intercalation = s1 + atom
+
+            intercalation = self.ase_to_pymatgen(intercalation)
+
+            n = intercalation.get_neighbors(intercalation[-1], 3.5)
+            n_Li_distances = []
+            needs_nudging = False
+            if len(n) == 0:
+                nudge[2] += -0.01
+            else:
+                for n_Li in n:
+                    n_Li_distances += [
+                        self.distance(intercalation[-1].coords, n_Li.coords)
+                    ]
+                    history += str([n_Li_distances]) + "\n"
+                    min_bond, max_bond = self._get_min_max_bonds(
+                        intercalation[-1].specie.Z, n_Li.specie.Z
+                    )
+                    if (
+                        self.distance(intercalation[-1].coords, n_Li.coords) < min_bond
+                        or self.distance(intercalation[-1].coords, n_Li.coords)
+                        > max_bond
+                        and not self.is_image(n_Li, intercalation[-1])
+                    ):
+                        nudge += self._nudgeVector(
+                            intercalation[-1].coords, n_Li.coords, min_bond, max_bond
+                        )
+                        needs_nudging = True
+                if not needs_nudging:
+                    return OgStructure(intercalation)
+                elif ii % 1000 == 0:
+                    do_leap = True
+                elif ii == max_trials - 1:
+                    return False
+            ii += 1
+        return False
+
     def adsorption_scanner(self, atom_symbol, max_trials=1000):
         def available_in_list(p, l):
             for il in l:

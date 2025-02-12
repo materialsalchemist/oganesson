@@ -5,6 +5,7 @@ import numpy as np
 from ase import Atoms
 from ase.cell import Cell
 from sympy import flatten
+import pandas as pd
 
 
 class Poscar:
@@ -51,6 +52,29 @@ class Potcar:
                     self.element_data[a]["RCORE"] = float(line.split()[2])
                 if "POMASS" in line:
                     self.element_data[a]["POMASS"] = float(line.split()[2])
+
+    @staticmethod
+    def write_potcar(vasp_folder, pseudo_folder, atom_label_pseudo_file=None):
+        if atom_label_pseudo_file is not None:
+            atom_label_pseudo = pd.read_csv(atom_label_pseudo_file, index_col="element")
+
+        f = open(vasp_folder + "/POSCAR", "r")
+        l = f.readlines()
+        f.close()
+        l = l[5].split()
+        potcar = ""
+        for atom_label in l:
+            if atom_label_pseudo_file is not None:
+                if atom_label in atom_label_pseudo.index:
+                    atom_label = atom_label_pseudo[
+                        atom_label_pseudo.index == atom_label
+                    ].pseudo.values[0]
+
+            atom_potcar = open(pseudo_folder + atom_label + "/POTCAR")
+            atom_potcar = atom_potcar.read()
+            potcar += atom_potcar
+            potcar_f = open(vasp_folder + "/POTCAR", "w")
+            potcar_f.write(potcar)
 
 
 class Outcar:
