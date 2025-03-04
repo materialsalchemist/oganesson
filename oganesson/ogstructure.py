@@ -1282,8 +1282,8 @@ class OgStructure:
                     steps=relaxation_steps,
                 )
                 if write_intermediate:
-                    self.structure.to(
-                        intermediates_folder + "/" + fn + "_" + str(i) + ".cif"
+                    self.to_ase().write(
+                        intermediates_folder + "/" + fn + "_" + str(i) + "." + write_intermediate_file_extension
                     )
         elif method == "opt_pulling":
             """
@@ -1464,9 +1464,8 @@ class OgStructure:
                     fix_atoms_indices=left_atoms_indices + right_atoms_indices,
                     fmax=fmax,
                 )
-                if write_intermediate:
-                    self.structure.to(
-                        intermediates_folder + "/" + fn + "_" + str(i) + ".cif"
+                self.to_ase().write(
+                        intermediates_folder + "/" + fn + "_" + str(i) + "." + write_intermediate_file_extension
                     )
         else:
             raise Exception("Fracture method not supported yet!")
