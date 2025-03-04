@@ -1183,6 +1183,7 @@ class OgStructure:
         steps=100,
         translation_step=0.1,
         write_intermediate=False,
+        write_intermediate_file_extension="cif",
         intermediates_folder="./",
         model="diep",
         method="opt_pulling_expansion",
@@ -1216,13 +1217,13 @@ class OgStructure:
                     relax_cell=False, model=model, fmax=fmax, steps=relaxation_steps
                 )
                 if write_intermediate:
-                    self.structure.to(
+                    self.to_ase().write(
                         intermediates_folder
                         + "/"
                         + fn
                         + "_expansionstep_"
                         + str(step)
-                        + ".cif"
+                        + "." + write_intermediate_file_extension
                     )
         elif method == "opt_pulling_expansion":
             """
