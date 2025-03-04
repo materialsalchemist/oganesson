@@ -240,7 +240,7 @@ class OgStructure:
         else:
             return False
 
-    def _get_site_for_neighbor_site(self, neighbor):
+    def get_site_for_neighbor_site(self, neighbor):
         for i_site in range(len(self.structure)):
             if self.equivalent_sites(i_site, neighbor):
                 return i_site
@@ -343,7 +343,7 @@ class OgStructure:
         s = self.to_ase()
         s.positions[:, 2] = s.positions[:, 2] - s.positions[:, 2].min()
         nudge = np.array([0.0, 0.0, 0.0])
-        
+
         ii = 0
         history = ""
         do_leap = False
@@ -571,7 +571,12 @@ class OgStructure:
         return self
 
     def generate_neb_images(
-        self, final_structure, frozen_atoms, num_images=5, model="diep", folder_tag=None
+        self,
+        final_structure,
+        frozen_atoms,
+        num_images=5,
+        model=Union[None, str],
+        folder_tag=None,
     ):
         if folder_tag is not None:
             neb_folder = "neb_path_" + folder_tag
@@ -587,7 +592,8 @@ class OgStructure:
         self.neb.interpolate(mic=True)
         for i in range(len(self.images)):
             self.images[i] = OgStructure(self.images[i])
-            # self.images[i] = self.images[i].relax(model=model)
+            if model is not None:
+                self.images[i] = self.images[i].relax(model=model)
             image_str = self.images[i].structure.to(fmt="poscar")
             os.mkdir(neb_folder + "/" + str(i).zfill(2))
             f = open(neb_folder + "/" + str(i).zfill(2) + "/POSCAR", "w")
@@ -615,7 +621,7 @@ class OgStructure:
                         neighbors += [site]
                 print("og:Checking site", i_site, ": Surrounded by", len(neighbors))
                 for neighbor in neighbors:
-                    i_neighbor_site = self._get_site_for_neighbor_site(neighbor)
+                    i_neighbor_site = self.get_site_for_neighbor_site(neighbor)
                     print(i_neighbor_site)
                     if i_neighbor_site is None:
                         raise Exception("og:Really? Wrong site in neighbor list!")
@@ -1632,9 +1638,17 @@ class OgStructure:
         return self
 
     def add_interstitial(
-        self, atom: Union[str, Element], cutoff=4, divisions=[10, 10, 10]
+        self,
+        atom: Union[str, Element],
+        cutoff=4,
+        divisions=[10, 10, 10],
+        threshold=2,
+        fill_multiple_spots=False,
     ):
-        """Creates an interstitial defect in the structure in-place by adding the atom to the available voids."""
+        """
+        Creates an interstitial defect in the structure in-place by adding the atom to the available voids.
+        Can be called iteratively until it returns False, which indicates that the structure has been filled with interstitial atoms.
+        """
 
         def density(r, R):
             return np.exp(-np.dot(r - R, r - R))
@@ -1654,13 +1668,45 @@ class OgStructure:
                             n[i, j, k] += density(r, R)
         n = n[10:20, 10:20, 10:20]
         p = np.where(n == np.min(n))
-        p = [
-            p[0][0] / (divisions[0] / 3),
-            p[1][0] / (divisions[1] / 3),
-            p[2][0] / (divisions[2] / 3),
-        ]
-        print(p)
-        self.structure.append(atom, p)
+        if not fill_multiple_spots:
+            p = [
+                p[0][0] / (divisions[0] / 3),
+                p[1][0] / (divisions[1] / 3),
+                p[2][0] / (divisions[2] / 3),
+            ]
+            print(p)
+            self.structure.append(atom, p)
+            neighbors = self.structure.get_neighbors(self.structure[-1], 2)
+            for n in neighbors:
+                sn = self.get_site_for_neighbor_site(n)
+                if (
+                    self.distance(
+                        self.structure[sn].coords, self.structure[len(self) - 1].coords
+                    )
+                    < threshold
+                ):
+                    self.structure.remove_sites([len(self) - 1])
+                    return False
+        else:
+            for ip in range(len(p[0])):
+                p_min = [
+                    p[0][ip] / (divisions[0] / 3),
+                    p[1][ip] / (divisions[1] / 3),
+                    p[2][ip] / (divisions[2] / 3),
+                ]
+                self.structure.append(atom, p_min)
+                neighbors = self.structure.get_neighbors(self.structure[-1], 2)
+                for n in neighbors:
+                    sn = self.get_site_for_neighbor_site(n)
+                    if (
+                        self.distance(
+                            self.structure[sn].coords,
+                            self.structure[len(self) - 1].coords,
+                        )
+                        < threshold
+                    ):
+                        self.structure.remove_sites([len(self) - 1])
+                        return self
         return self
 
     def get_atom_count(self, atom: str):
