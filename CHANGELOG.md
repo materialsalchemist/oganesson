@@ -1,6 +1,12 @@
 ## Changelog
 
 
+### 0.1.45 - 2025-03-05
+
+* Added write_potcar()
+* Added add_molecule_to_surface()
+* Added fill_multiple_spots option to add_interstitial()
+
 ### 0.1.44 - 2024-12-16
 
 * Added the get_ferwe_ferdo() function to oganesson.io.vasp
