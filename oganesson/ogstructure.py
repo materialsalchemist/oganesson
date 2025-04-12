@@ -339,7 +339,14 @@ class OgStructure:
             ii += 1
         return False
 
-    def add_molecule_to_surface(self, m: Atoms, m_centre_atom=None, max_trials=1000):
+    def add_molecule_to_surface(
+        self,
+        m: Atoms,
+        displacement=2.5,
+        m_centre_atom=None,
+        max_trials=1000,
+        s_centre_atom=None,
+    ):
         s = self.to_ase()
         s.positions[:, 2] = s.positions[:, 2] - s.positions[:, 2].min()
         nudge = np.array([0.0, 0.0, 0.0])
@@ -349,20 +356,32 @@ class OgStructure:
         do_leap = False
         while ii < max_trials:
             s1 = s
-            s1_thickness = s1.positions[:, 2].max() - s1.positions[:, 2].min()
+            if s_centre_atom is None:
+                s1_thickness = s1.positions[:, 2].max() - s1.positions[:, 2].min()
+            else:
+                s1_thickness = s1.positions[s_centre_atom, 2] - s1.positions[:, 2].min()
             if m_centre_atom is None:
                 m = OgStructure(m).center().zero_z().to_ase()
             else:
                 m = OgStructure(m).center(m_centre_atom).zero_z().to_ase()
 
             if do_leap:
-                m.positions += np.array(
-                    [
-                        s.cell.cellpar()[0] * np.random.random(),
-                        s.cell.cellpar()[1] * np.random.random(),
-                        nudge[2] + s1_thickness + 2.5 / 2,
-                    ]
-                )
+                if s_centre_atom is None:
+                    m.positions += np.array(
+                        [
+                            s.cell.cellpar()[0] * np.random.random(),
+                            s.cell.cellpar()[1] * np.random.random(),
+                            nudge[2] + s1_thickness + displacement / 2,
+                        ]
+                    )
+                else:
+                    m.positions += np.array(
+                        [
+                            s.positions[s_centre_atom, 0] + np.random.random(),
+                            s.positions[s_centre_atom, 1] + np.random.random(),
+                            nudge[2] + s1_thickness + displacement / 2,
+                        ]
+                    )
                 atom = Atoms(
                     positions=m.positions,
                     pbc=True,
@@ -370,24 +389,33 @@ class OgStructure:
                     symbols=m.symbols,
                 )
             else:
-                m.positions += np.array(
-                    [
-                        s.cell.cellpar()[0] / 2 + nudge[0],
-                        s.cell.cellpar()[1] / 2 + nudge[1],
-                        nudge[2] + s1_thickness + 2.5 / 2,
-                    ]
-                )
+                if s_centre_atom is None:
+                    m.positions += np.array(
+                        [
+                            s.cell.cellpar()[0] / 2 + nudge[0],
+                            s.cell.cellpar()[1] / 2 + nudge[1],
+                            nudge[2] + s1_thickness + displacement / 2,
+                        ]
+                    )
+                else:
+                    m.positions += np.array(
+                        [
+                            s.positions[s_centre_atom, 0] + nudge[0],
+                            s.positions[s_centre_atom, 1] + nudge[1],
+                            nudge[2] + s1_thickness + displacement / 2,
+                        ]
+                    )
                 atom = Atoms(
                     positions=m.positions,
                     pbc=True,
                     cell=s.cell,
                     symbols=m.symbols,
                 )
-            intercalation = s1 + atom
+            surface_molecule = s1 + atom
 
-            intercalation = self.ase_to_pymatgen(intercalation)
+            surface_molecule = self.ase_to_pymatgen(surface_molecule)
 
-            n = intercalation.get_neighbors(intercalation[-1], 3.5)
+            n = surface_molecule.get_neighbors(surface_molecule[-1], 3.5)
             n_Li_distances = []
             needs_nudging = False
             if len(n) == 0:
@@ -395,24 +423,24 @@ class OgStructure:
             else:
                 for n_Li in n:
                     n_Li_distances += [
-                        self.distance(intercalation[-1].coords, n_Li.coords)
+                        self.distance(surface_molecule[-1].coords, n_Li.coords)
                     ]
                     history += str([n_Li_distances]) + "\n"
                     min_bond, max_bond = self._get_min_max_bonds(
-                        intercalation[-1].specie.Z, n_Li.specie.Z
+                        surface_molecule[-1].specie.Z, n_Li.specie.Z
                     )
                     if (
-                        self.distance(intercalation[-1].coords, n_Li.coords) < min_bond
-                        or self.distance(intercalation[-1].coords, n_Li.coords)
+                        self.distance(surface_molecule[-1].coords, n_Li.coords) < min_bond
+                        or self.distance(surface_molecule[-1].coords, n_Li.coords)
                         > max_bond
-                        and not self.is_image(n_Li, intercalation[-1])
+                        and not self.is_image(n_Li, surface_molecule[-1])
                     ):
                         nudge += self._nudgeVector(
-                            intercalation[-1].coords, n_Li.coords, min_bond, max_bond
+                            surface_molecule[-1].coords, n_Li.coords, min_bond, max_bond
                         )
                         needs_nudging = True
                 if not needs_nudging:
-                    return OgStructure(intercalation)
+                    return OgStructure(surface_molecule)
                 elif ii % 1000 == 0:
                     do_leap = True
                 elif ii == max_trials - 1:
@@ -1184,7 +1212,10 @@ class OgStructure:
         translation_step=0.1,
         write_intermediate=False,
         write_intermediate_file_extension="cif",
+        write_intermediate_before=False,
+        write_intermediate_before_file_extension="cif",
         intermediates_folder="./",
+        intermediates_folder_before="./",
         model="diep",
         method="opt_pulling_expansion",
         freeze_size=3,
@@ -1223,7 +1254,8 @@ class OgStructure:
                         + fn
                         + "_expansionstep_"
                         + str(step)
-                        + "." + write_intermediate_file_extension
+                        + "."
+                        + write_intermediate_file_extension
                     )
         elif method == "opt_pulling_expansion":
             """
@@ -1273,6 +1305,16 @@ class OgStructure:
                 p = self.structure.cart_coords
                 p[:, axis_dict[axis]] *= (delta + original_length) / original_length
                 self.set_positions(p)
+                if write_intermediate_before:
+                    self.to_ase().write(
+                        intermediates_folder_before
+                        + "/"
+                        + fn
+                        + "_"
+                        + str(i)
+                        + "."
+                        + write_intermediate_before_file_extension
+                    )
                 # Finally, relax
                 self.relax(
                     relax_cell=False,
@@ -1283,7 +1325,13 @@ class OgStructure:
                 )
                 if write_intermediate:
                     self.to_ase().write(
-                        intermediates_folder + "/" + fn + "_" + str(i) + "." + write_intermediate_file_extension
+                        intermediates_folder
+                        + "/"
+                        + fn
+                        + "_"
+                        + str(i)
+                        + "."
+                        + write_intermediate_file_extension
                     )
         elif method == "opt_pulling":
             """
@@ -1465,8 +1513,14 @@ class OgStructure:
                     fmax=fmax,
                 )
                 self.to_ase().write(
-                        intermediates_folder + "/" + fn + "_" + str(i) + "." + write_intermediate_file_extension
-                    )
+                    intermediates_folder
+                    + "/"
+                    + fn
+                    + "_"
+                    + str(i)
+                    + "."
+                    + write_intermediate_file_extension
+                )
         else:
             raise Exception("Fracture method not supported yet!")
         return self
