@@ -1,6 +1,10 @@
 ## Changelog
 
 
+### 0.1.46 - 2025-07-11
+
+* Hot fix: Trajectory class in ase is not in ase.io.trajectory, not ase.md.md
+
 ### 0.1.45 - 2025-03-05
 
 * Added write_potcar()

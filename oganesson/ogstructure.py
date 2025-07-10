@@ -17,7 +17,7 @@ from bsym.interface.pymatgen import unique_structure_substitutions
 from pymatgen.io.cif import CifParser
 from pymatgen.core import Lattice
 from diffusivity.diffusion_coefficients import DiffusionCoefficient
-from ase.md.md import Trajectory
+from ase.io.trajectory import Trajectory
 from pymatgen.analysis.diffraction.xrd import XRDCalculator
 from pymatgen.util.coord import pbc_shortest_vectors
 from sympy import cos, pi, sqrt, sin
