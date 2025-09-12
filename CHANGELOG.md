@@ -1,6 +1,12 @@
 ## Changelog
 
 
+### 0.1.47 - 2025-09-12
+
+* Added the passivate() method
+* Added the zero() method to move structure to zero coordinate axis on the selected axis
+* A few minor fixes
+
 ### 0.1.46 - 2025-07-11
 
 * Hot fix: Trajectory class in ase is not in ase.io.trajectory, not ase.md.md

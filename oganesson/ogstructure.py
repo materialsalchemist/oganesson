@@ -227,8 +227,11 @@ class OgStructure:
                     bond_data[k] = [Rij]
         return bond_data
 
-    def translate(self, v):
-        self.structure = self.structure.translate_sites(range(len(self)), v)
+    def translate(self, v, frac_coords=False):
+        self.structure = self.structure.translate_sites(
+            range(len(self)), v, frac_coords
+        )
+        return self
 
     def equivalent_sites(self, i, site):
         if (
@@ -255,6 +258,24 @@ class OgStructure:
         )
         return bonds_dictionary["min"][key], bonds_dictionary["max"][key]
 
+    def passivate(self, atom, passivating_atom_symbol, d=2.5):
+        n = self.structure.get_neighbors(self.structure[atom], 3.5)
+        v = np.zeros(3)
+        for ni in range(len(n)):
+            v += n[ni].coords - self.structure[atom].coords
+        v /= len(n)
+        v = v / np.linalg.norm(v) * d
+        v *= -1  # opposite direction
+        p = self.structure[atom].coords + v
+        atoms = self.to_ase()
+        atoms = atoms + Atoms(
+            passivating_atom_symbol,
+            positions=[[p[0], p[1], p[2]]],
+            cell=atoms.cell,
+        )
+        self.structure = OgStructure.ase_to_pymatgen(atoms)
+        return self
+
     def _nudgeVector(self, atom_coords, n, min_bond, max_bond):
         atom_coords = np.array(atom_coords)
         n = np.array(n)
@@ -263,9 +284,9 @@ class OgStructure:
         elif self.distance(atom_coords, n) > max_bond:
             return -(atom_coords - n) / np.linalg.norm(atom_coords - n) / 100
 
-    def add_atom_to_surface(self, atom_symbol, max_trials=1000):
+    def add_atom_to_surface(self, atom_symbol, axis=2, d=2.5, max_trials=1000):
         s = self.to_ase()
-        s.positions[:, 2] = s.positions[:, 2] - s.positions[:, 2].min()
+        s.positions[:, axis] = s.positions[:, axis] - s.positions[:, axis].min()
         nudge = np.array([0.0, 0.0, 0.0])
 
         ii = 0
@@ -273,35 +294,87 @@ class OgStructure:
         do_leap = False
         while ii < max_trials:
             s1 = s
-            s1_thickness = s1.positions[:, 2].max() - s1.positions[:, 2].min()
+            s1_thickness = s1.positions[:, axis].max() - s1.positions[:, axis].min()
             if do_leap:
-                atom = Atoms(
-                    positions=[
-                        [
-                            s.cell.cellpar()[0] * np.random.random(),
-                            s.cell.cellpar()[1] * np.random.random(),
-                            nudge[2] + s1_thickness + 2.5 / 2,
-                        ]
-                    ],
-                    pbc=True,
-                    cell=s.cell,
-                    symbols=[atom_symbol],
-                )
-
+                if axis == 2:
+                    atom = Atoms(
+                        positions=[
+                            [
+                                s.cell.cellpar()[0] * np.random.random(),
+                                s.cell.cellpar()[1] * np.random.random(),
+                                nudge[2] + s1_thickness + d / 2,
+                            ]
+                        ],
+                        pbc=True,
+                        cell=s.cell,
+                        symbols=[atom_symbol],
+                    )
+                elif axis == 1:
+                    atom = Atoms(
+                        positions=[
+                            [
+                                s.cell.cellpar()[0] * np.random.random(),
+                                nudge[1] + s1_thickness + d / 2,
+                                s.cell.cellpar()[2] * np.random.random(),
+                            ]
+                        ],
+                        pbc=True,
+                        cell=s.cell,
+                        symbols=[atom_symbol],
+                    )
+                else:
+                    atom = Atoms(
+                        positions=[
+                            [
+                                nudge[0] + s1_thickness + d / 2,
+                                s.cell.cellpar()[1] * np.random.random(),
+                                s.cell.cellpar()[2] * np.random.random(),
+                            ]
+                        ],
+                        pbc=True,
+                        cell=s.cell,
+                        symbols=[atom_symbol],
+                    )
             else:
-                atom = Atoms(
-                    positions=[
-                        [
-                            s.cell.cellpar()[0] / 2 + nudge[0],
-                            s.cell.cellpar()[1] / 2 + nudge[1],
-                            nudge[2] + s1_thickness + 2.5 / 2,
-                        ]
-                    ],
-                    symbols=[atom_symbol],
-                    pbc=True,
-                    cell=s.cell,
-                )
-
+                if axis == 2:
+                    atom = Atoms(
+                        positions=[
+                            [
+                                s.cell.cellpar()[0] / 2 + nudge[0],
+                                s.cell.cellpar()[1] / 2 + nudge[1],
+                                nudge[2] + s1_thickness + d / 2,
+                            ]
+                        ],
+                        symbols=[atom_symbol],
+                        pbc=True,
+                        cell=s.cell,
+                    )
+                elif axis == 1:
+                    atom = Atoms(
+                        positions=[
+                            [
+                                s.cell.cellpar()[0] / 2 + nudge[0],
+                                nudge[1] + s1_thickness + d / 2,
+                                s.cell.cellpar()[2] / 2 + nudge[2],
+                            ]
+                        ],
+                        symbols=[atom_symbol],
+                        pbc=True,
+                        cell=s.cell,
+                    )
+                else:
+                    atom = Atoms(
+                        positions=[
+                            [
+                                nudge[0] + s1_thickness + d / 2,
+                                s.cell.cellpar()[1] / 2 + nudge[1],
+                                s.cell.cellpar()[2] / 2 + nudge[2],
+                            ]
+                        ],
+                        symbols=[atom_symbol],
+                        pbc=True,
+                        cell=s.cell,
+                    )
             intercalation = s1 + atom
 
             intercalation = self.ase_to_pymatgen(intercalation)
@@ -310,7 +383,7 @@ class OgStructure:
             n_Li_distances = []
             needs_nudging = False
             if len(n) == 0:
-                nudge[2] += -0.01
+                nudge[axis] += -0.01
             else:
                 for n_Li in n:
                     n_Li_distances += [
@@ -430,7 +503,8 @@ class OgStructure:
                         surface_molecule[-1].specie.Z, n_Li.specie.Z
                     )
                     if (
-                        self.distance(surface_molecule[-1].coords, n_Li.coords) < min_bond
+                        self.distance(surface_molecule[-1].coords, n_Li.coords)
+                        < min_bond
                         or self.distance(surface_molecule[-1].coords, n_Li.coords)
                         > max_bond
                         and not self.is_image(n_Li, surface_molecule[-1])
@@ -732,6 +806,7 @@ class OgStructure:
         model="diep",
         pressure=1.01325 * units.bar,
         fix_atoms_indices=None,
+        append_trajectory=False,
     ):
         this_dir = os.path.abspath(os.path.dirname(__file__))
         if model == "m3gnet":
@@ -748,11 +823,13 @@ class OgStructure:
             os.mkdir("og_lab")
 
         self.folder_tag = folder_tag
+
         if folder_tag is None:
             self.folder_tag = str(uuid.uuid4())
         else:
             self.folder_tag = "simulation_" + self.folder_tag
-        os.mkdir("og_lab/" + self.folder_tag)
+            if not append_trajectory:
+                os.mkdir("og_lab/" + self.folder_tag)
 
         self.trajectory_file = (
             "og_lab/" + self.folder_tag + "/" + str(temperature) + ".traj"
@@ -773,6 +850,7 @@ class OgStructure:
             pressure=pressure,
             external_stress=pressure,
             loginterval=loginterval,
+            append_trajectory=append_trajectory,
         )
         md.run(steps=steps)
 
@@ -992,6 +1070,18 @@ class OgStructure:
         z = self.structure.cart_coords[:, 2]
         z = z - z.min()
         new_coords = np.array([x, y, z]).T
+        self.structure = Structure(
+            lattice=self.structure.lattice,
+            species=self.structure.species,
+            coords=new_coords,
+            coords_are_cartesian=True,
+        )
+        return self
+
+    def zero(self, axis=2):
+        coords = [self.structure.cart_coords[:, i] for i in range(3)]
+        coords[axis] = coords[axis] - coords[axis].min()
+        new_coords = np.array(coords).T
         self.structure = Structure(
             lattice=self.structure.lattice,
             species=self.structure.species,

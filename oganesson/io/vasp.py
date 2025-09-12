@@ -12,17 +12,31 @@ class Poscar:
     def __init__(self, structure) -> None:
         self.ogstructure = OgStructure(structure)
 
-    def freeze_up_to(self, z):
+    def freeze_up_to(self, v, axis=2):
         """
-        Produce the POSCAR file after modifying it to constraint the layers of atoms below z Angstroms
+        Produce the POSCAR file after modifying it to constraint the layers of atoms below v Angstroms
         """
         constraints = np.ndarray(self.ogstructure().cart_coords.shape)
         for i in range(len(self.ogstructure)):
             atom = self.ogstructure().cart_coords[i]
-            if atom[2] < z:
+            if atom[axis] < v:
                 constraints[i, :] = False
             else:
                 constraints[i, :] = True
+        mpposcar = MPPoscar(self.ogstructure(), selective_dynamics=constraints)
+        return mpposcar.get_string()
+
+    def freeze_atoms(self, atoms, axes=None):
+        """
+        Produce the POSCAR file after freezing a set of atoms along specified axes
+        """
+        constraints = np.ndarray(self.ogstructure().cart_coords.shape)
+        constraints[atoms, :] = True
+        if axes is not None:
+            for i in axes:
+                constraints[atoms, i] = False
+        else:
+            constraints[atoms, :] = False
         mpposcar = MPPoscar(self.ogstructure(), selective_dynamics=constraints)
         return mpposcar.get_string()
 
