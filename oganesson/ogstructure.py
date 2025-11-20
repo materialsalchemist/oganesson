@@ -25,6 +25,7 @@ from oganesson.utilities import epsilon
 from oganesson.utilities.constants import F
 from oganesson.utilities.bonds_dictionary import bonds_dictionary
 from oganesson.utilities import atomic_data
+from oganesson.electron_density.lcao import compute_density, write_cube, write_chgcar
 from ase.constraints import FixAtoms
 from ase import units
 
@@ -284,17 +285,34 @@ class OgStructure:
         elif self.distance(atom_coords, n) > max_bond:
             return -(atom_coords - n) / np.linalg.norm(atom_coords - n) / 100
 
-    def add_atom_to_surface(self, atom_symbol, axis=2, d=2.5, max_trials=1000):
+    def add_atom_to_surface(
+        self,
+        atom_symbol,
+        axis=2,
+        d=2.5,
+        max_trials=1000,
+        thickness=None,
+        min_distance=None,
+    ):
         s = self.to_ase()
         s.positions[:, axis] = s.positions[:, axis] - s.positions[:, axis].min()
-        nudge = np.array([0.0, 0.0, 0.0])
+        nudge = np.array(
+            [
+                np.random.random() * s.get_cell_lengths_and_angles()[0],
+                np.random.random() * s.get_cell_lengths_and_angles()[1],
+                0.0,
+            ]
+        )
 
         ii = 0
         history = ""
         do_leap = False
         while ii < max_trials:
             s1 = s
-            s1_thickness = s1.positions[:, axis].max() - s1.positions[:, axis].min()
+            if thickness is None:
+                s1_thickness = s1.positions[:, axis].max() - s1.positions[:, axis].min()
+            else:
+                s1_thickness = thickness
             if do_leap:
                 if axis == 2:
                     atom = Atoms(
@@ -375,36 +393,41 @@ class OgStructure:
                         pbc=True,
                         cell=s.cell,
                     )
-            intercalation = s1 + atom
+            surface_atom = s1 + atom
 
-            intercalation = self.ase_to_pymatgen(intercalation)
-
-            n = intercalation.get_neighbors(intercalation[-1], 3.5)
-            n_Li_distances = []
+            surface_atom = self.ase_to_pymatgen(surface_atom)
+            n = surface_atom.get_neighbors(surface_atom[-1], 3.5)
+            n_neighbors_list = []
             needs_nudging = False
             if len(n) == 0:
                 nudge[axis] += -0.01
             else:
-                for n_Li in n:
-                    n_Li_distances += [
-                        self.distance(intercalation[-1].coords, n_Li.coords)
+                for n_neighbor in n:
+                    n_neighbors_list += [
+                        self.distance(surface_atom[-1].coords, n_neighbor.coords)
                     ]
-                    history += str([n_Li_distances]) + "\n"
+                    history += str([n_neighbors_list]) + "\n"
                     min_bond, max_bond = self._get_min_max_bonds(
-                        intercalation[-1].specie.Z, n_Li.specie.Z
+                        surface_atom[-1].specie.Z, n_neighbor.specie.Z
                     )
+                    if min_distance is not None:
+                        min_bond = min_distance
                     if (
-                        self.distance(intercalation[-1].coords, n_Li.coords) < min_bond
-                        or self.distance(intercalation[-1].coords, n_Li.coords)
+                        self.distance(surface_atom[-1].coords, n_neighbor.coords)
+                        < min_bond
+                        or self.distance(surface_atom[-1].coords, n_neighbor.coords)
                         > max_bond
-                        and not self.is_image(n_Li, intercalation[-1])
+                        and not self.is_image(n_neighbor, surface_atom[-1])
                     ):
                         nudge += self._nudgeVector(
-                            intercalation[-1].coords, n_Li.coords, min_bond, max_bond
+                            surface_atom[-1].coords,
+                            n_neighbor.coords,
+                            min_bond,
+                            max_bond,
                         )
                         needs_nudging = True
                 if not needs_nudging:
-                    return OgStructure(intercalation)
+                    return OgStructure(surface_atom)
                 elif ii % 1000 == 0:
                     do_leap = True
                 elif ii == max_trials - 1:
@@ -419,20 +442,33 @@ class OgStructure:
         m_centre_atom=None,
         max_trials=1000,
         s_centre_atom=None,
+        thickness=None,
+        min_distance=None,
     ):
         s = self.to_ase()
         s.positions[:, 2] = s.positions[:, 2] - s.positions[:, 2].min()
-        nudge = np.array([0.0, 0.0, 0.0])
+        nudge = np.array(
+            [
+                np.random.random() * s.get_cell_lengths_and_angles()[0],
+                np.random.random() * s.get_cell_lengths_and_angles()[1],
+                0.0,
+            ]
+        )
 
         ii = 0
         history = ""
         do_leap = False
         while ii < max_trials:
             s1 = s
-            if s_centre_atom is None:
-                s1_thickness = s1.positions[:, 2].max() - s1.positions[:, 2].min()
+            if thickness is None:
+                if s_centre_atom is None:
+                    s1_thickness = s1.positions[:, 2].max() - s1.positions[:, 2].min()
+                else:
+                    s1_thickness = (
+                        s1.positions[s_centre_atom, 2] - s1.positions[:, 2].min()
+                    )
             else:
-                s1_thickness = s1.positions[s_centre_atom, 2] - s1.positions[:, 2].min()
+                s1_thickness = thickness
             if m_centre_atom is None:
                 m = OgStructure(m).center().zero_z().to_ase()
             else:
@@ -489,28 +525,33 @@ class OgStructure:
             surface_molecule = self.ase_to_pymatgen(surface_molecule)
 
             n = surface_molecule.get_neighbors(surface_molecule[-1], 3.5)
-            n_Li_distances = []
+            n_neighbors_list = []
             needs_nudging = False
             if len(n) == 0:
                 nudge[2] += -0.01
             else:
-                for n_Li in n:
-                    n_Li_distances += [
-                        self.distance(surface_molecule[-1].coords, n_Li.coords)
+                for n_neighbor in n:
+                    n_neighbors_list += [
+                        self.distance(surface_molecule[-1].coords, n_neighbor.coords)
                     ]
-                    history += str([n_Li_distances]) + "\n"
+                    history += str([n_neighbors_list]) + "\n"
                     min_bond, max_bond = self._get_min_max_bonds(
-                        surface_molecule[-1].specie.Z, n_Li.specie.Z
+                        surface_molecule[-1].specie.Z, n_neighbor.specie.Z
                     )
+                    if min_distance is not None:
+                        min_bond = min_distance
                     if (
-                        self.distance(surface_molecule[-1].coords, n_Li.coords)
+                        self.distance(surface_molecule[-1].coords, n_neighbor.coords)
                         < min_bond
-                        or self.distance(surface_molecule[-1].coords, n_Li.coords)
+                        or self.distance(surface_molecule[-1].coords, n_neighbor.coords)
                         > max_bond
-                        and not self.is_image(n_Li, surface_molecule[-1])
+                        and not self.is_image(n_neighbor, surface_molecule[-1])
                     ):
                         nudge += self._nudgeVector(
-                            surface_molecule[-1].coords, n_Li.coords, min_bond, max_bond
+                            surface_molecule[-1].coords,
+                            n_neighbor.coords,
+                            min_bond,
+                            max_bond,
                         )
                         needs_nudging = True
                 if not needs_nudging:
@@ -1633,6 +1674,26 @@ class OgStructure:
                 coords_are_cartesian=True,
             )
         )
+
+    def generate_density(
+        self,
+        ngrid,
+        K,
+        pbc_mode="sum",
+        nimg=1,
+        nx=40,
+        ny=40,
+        nz=40,
+        fmt="chgcar",
+        out="density_output.dat",
+    ):
+        rho_flat, cell, symbols, cart, summary = compute_density(
+            self.to_ase(), ngrid, K, pbc_mode, nimg
+        )
+        if fmt == "cube":
+            write_cube(out, rho_flat, cell, (nx, ny, nz), symbols, cart)
+        else:
+            write_chgcar(out, rho_flat, cell, symbols, cart, (nx, ny, nz))
 
     """
     public XYZ rotationalAlignmentOnYAxis(int a, int b) {
