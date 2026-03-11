@@ -18,6 +18,63 @@ After installing the above library, you can install `og` using the `pip` command
 
 `og` is currently under active development. The following features are currently available.
 
+## Native structure core (OgStructure)
+
+`OgStructure` is the primary structure container used across Og (GA operators,
+descriptor generation, relaxations, etc.).
+
+Historically, `OgStructure` stored a pymatgen `Structure` internally and
+frequently converted to/from ASE `Atoms`. This worked, but it also:
+
+- pulled heavy dependencies at import-time,
+- created conversion overhead in inner loops,
+- made it harder to run Og in minimal environments.
+
+Og now ships a **native structure representation**:
+
+- `oganesson.native_structure.OgNativeStructure`
+
+`OgStructure` stores an `OgNativeStructure` internally and provides adapters:
+
+- `OgStructure.to_ase()` → ASE `Atoms` (requires `ase`)
+- `OgStructure.to_pymatgen()` → pymatgen `Structure` (requires `pymatgen`)
+
+### OgNativeStructure: data model
+
+An `OgNativeStructure` consists of:
+
+- `lattice`: 3×3 lattice matrix (row vectors, Å)
+- `species`: list of element symbols (e.g. `["Si", "O", "O"]`)
+- `frac_coords`: N×3 fractional coordinates wrapped to `[0,1)`
+- `pbc`: periodic boundary conditions
+
+It implements the small subset of the pymatgen `Structure` API that Og uses
+internally (neighbors, translations, supercells, sorting, etc.).
+
+### Converting existing code
+
+Existing code that did `og.structure` and assumed a pymatgen object will now
+receive a native structure. When a pymatgen object is needed, use:
+
+```python
+pmg = og.to_pymatgen()
+```
+
+and when ASE is needed:
+
+```python
+atoms = og.to_ase()
+```
+
+### Performance notes
+
+- Import time is reduced by guarding optional dependencies and avoiding eager
+  conversions.
+- Coordinate transforms are vectorized in NumPy.
+- Neighbor search in native mode is currently O(N²) with a minimal-image
+  convention. This is adequate for small/medium cells; for large structures,
+  consider adding a cell list in `oganesson.native_structure`.
+
 ## Machine learning descriptors
 
 `og` will bring together machine learning descriptors for materials and molecules within a unified framework. `og` currently provides the following descriptors:

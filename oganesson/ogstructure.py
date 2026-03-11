@@ -1,40 +1,77 @@
+"""oganesson.ogstructure
+
+`OgStructure` is Og's primary structure container. It stores a lightweight native
+structure (`OgNativeStructure`) and provides adapters to ASE/pymatgen when those
+optional dependencies are installed.
+"""
+
 import numpy as np
-from ase.mep.neb import NEB
 import os
 import math
-from ase.io import read
-from typing import List, Optional, Tuple, Union
-from numpy.typing import ArrayLike
 import random
 import uuid
 import time
+from typing import List, Optional, Tuple, Union
+from numpy.typing import ArrayLike
 
-import matplotlib.pyplot as plt
-from ase import Atoms, Atom
-from ase.cell import Cell
-from pymatgen.core import Structure, Element
-from bsym.interface.pymatgen import unique_structure_substitutions
-from pymatgen.io.cif import CifParser
-from pymatgen.core import Lattice
-from diffusivity.diffusion_coefficients import DiffusionCoefficient
-from ase.io.trajectory import Trajectory
-from pymatgen.analysis.diffraction.xrd import XRDCalculator
-from pymatgen.util.coord import pbc_shortest_vectors
-from sympy import cos, pi, sqrt, sin
-from oganesson.utilities import epsilon
+from oganesson.native_structure import OgNativeStructure
+from oganesson.utilities import epsilon, atomic_data
 from oganesson.utilities.constants import F
 from oganesson.utilities.bonds_dictionary import bonds_dictionary
-from oganesson.utilities import atomic_data
-from oganesson.electron_density.lcao import compute_density, write_cube, write_chgcar
-from ase.constraints import FixAtoms
-from ase import units
+try:
+    from oganesson.electron_density.lcao import compute_density, write_cube, write_chgcar  # type: ignore
+except ModuleNotFoundError:
+    compute_density = write_cube = write_chgcar = None  # type: ignore
+
+# ---- Optional deps (guarded) ----
+try:
+    import matplotlib.pyplot as plt  # type: ignore
+except ModuleNotFoundError:
+    plt = None  # type: ignore
+
+try:
+    from ase import Atoms, Atom, units  # type: ignore
+    from ase.cell import Cell  # type: ignore
+    from ase.constraints import FixAtoms  # type: ignore
+    from ase.io import read  # type: ignore
+    from ase.io.trajectory import Trajectory  # type: ignore
+    from ase.mep.neb import NEB  # type: ignore
+except ModuleNotFoundError:
+    Atoms = Atom = Cell = FixAtoms = Trajectory = NEB = None  # type: ignore
+    read = None  # type: ignore
+    from types import SimpleNamespace
+    units = SimpleNamespace(bar=1.0)  # minimal fallback for defaults
+
+
+try:
+    from pymatgen.core import Structure, Element, Lattice  # type: ignore
+    from pymatgen.io.cif import CifParser  # type: ignore
+    from pymatgen.analysis.diffraction.xrd import XRDCalculator  # type: ignore
+    from pymatgen.util.coord import pbc_shortest_vectors  # type: ignore
+except ModuleNotFoundError:
+    Structure = Element = Lattice = CifParser = XRDCalculator = pbc_shortest_vectors = None  # type: ignore
+
+try:
+    from bsym.interface.pymatgen import unique_structure_substitutions  # type: ignore
+except ModuleNotFoundError:
+    unique_structure_substitutions = None  # type: ignore
+
+try:
+    from diffusivity.diffusion_coefficients import DiffusionCoefficient  # type: ignore
+except ModuleNotFoundError:
+    DiffusionCoefficient = None  # type: ignore
+
+try:
+    from sympy import cos, pi, sqrt, sin  # type: ignore
+except ModuleNotFoundError:
+    cos = pi = sqrt = sin = None  # type: ignore
 
 try:
     import matgl
     from matgl.ext.ase import Relaxer
     from matgl.ext.ase import MolecularDynamics
 except ModuleNotFoundError:
-    print("og:matgl is not installed.")
+    matgl = Relaxer = MolecularDynamics = None  # type: ignore
 
 
 class OgStructure:
@@ -45,26 +82,58 @@ class OgStructure:
 
     def __init__(
         self,
-        structure: Union[Atoms, Structure, str] = None,
-        file_name: str = None,
+        structure: Union["OgStructure", OgNativeStructure, "Atoms", "Structure", str, None] = None,
+        file_name: Optional[str] = None,
         structure_tag=None,
     ) -> None:
+        """Create an :class:`OgStructure`.
+
+        Parameters
+        ----------
+        structure
+            One of:
+            - :class:`OgStructure` (copied)
+            - :class:`~oganesson.native_structure.OgNativeStructure` (used directly)
+            - ASE ``Atoms`` (converted, if ASE is installed)
+            - pymatgen ``Structure`` (converted, if pymatgen is installed)
+            - CIF string (parsed via pymatgen, if installed)
+        file_name
+            Path to a structure file readable by ASE (e.g., ``.cif``, ``.vasp``),
+            if ASE is installed.
+        structure_tag
+            Optional metadata tag attached to the instance.
+        """
         self.structure_tag = structure_tag
+
+        if isinstance(structure, OgStructure):
+            # cheap copy
+            self.structure = structure.structure.copy()
+            self.structure.sort()
+            return
+
         if structure is not None:
-            if isinstance(structure, OgStructure):
-                self = structure
-            if isinstance(structure, str):
+            if isinstance(structure, OgNativeStructure):
+                self.structure = structure.copy()
+            elif isinstance(structure, str):
+                if CifParser is None:
+                    raise ModuleNotFoundError("pymatgen is required to parse CIF strings.")
                 parser = CifParser.from_str(structure)
-                structure = parser.get_structures()
-                self.structure = structure[0]
-            elif isinstance(structure, Atoms):
-                self.structure = self.ase_to_pymatgen(structure)
-            elif isinstance(structure, Structure):
-                self.structure = structure
+                pmg_structs = parser.get_structures()
+                if not pmg_structs:
+                    raise ValueError("CIF string parsed but no structures were found.")
+                self.structure = self.pymatgen_to_native(pmg_structs[0])
+            elif Atoms is not None and isinstance(structure, Atoms):
+                self.structure = self.ase_to_native(structure)
+            elif Structure is not None and isinstance(structure, Structure):
+                self.structure = self.pymatgen_to_native(structure)
             else:
-                raise Exception("Structure type is not recognized.")
+                raise TypeError(f"Unrecognized structure type: {type(structure)!r}")
         elif file_name is not None:
-            self.structure = self.ase_to_pymatgen(read(file_name))
+            if read is None:
+                raise ModuleNotFoundError("ase is required to read structure files.")
+            self.structure = self.ase_to_native(read(file_name))
+        else:
+            raise ValueError("Either 'structure' or 'file_name' must be provided.")
 
         self.structure.sort()
 
@@ -78,53 +147,62 @@ class OgStructure:
         return len(self.structure)
 
     @staticmethod
-    def db_to_structure(row):
-        return Structure(
-            coords_are_cartesian=True,
-            coords=row.positions,
-            species=row.symbols,
-            lattice=row.cell,
-        )
+    def db_to_structure(row) -> OgNativeStructure:
+        """Build a native structure from a database row with fields: positions, symbols, cell."""
+        cell = np.asarray(row.cell, dtype=float)
+        pos = np.asarray(row.positions, dtype=float)
+        frac = pos @ np.linalg.inv(cell)
+        return OgNativeStructure(lattice=cell, species=list(row.symbols), frac_coords=frac, pbc=True)
 
     @staticmethod
     def distance(a, b):
         return np.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
     @staticmethod
-    def ase_to_pymatgen(a):
-        return Structure(
-            coords_are_cartesian=True,
-            coords=a.positions,
-            species=a.symbols,
-            lattice=a.cell,
-        )
+    def ase_to_native(a: Atoms) -> OgNativeStructure:
+        """Convert ASE ``Atoms`` to native structure."""
+        cell = np.asarray(a.cell.array if hasattr(a.cell, 'array') else a.cell, dtype=float)
+        frac = np.asarray(a.get_scaled_positions(wrap=True), dtype=float)
+        return OgNativeStructure(lattice=cell, species=list(a.get_chemical_symbols()), frac_coords=frac, pbc=True)
 
     @staticmethod
-    def is_image(a, b):
-        return a.is_periodic_image(b)
+    def pymatgen_to_native(structure: Structure) -> OgNativeStructure:
+        """Convert pymatgen ``Structure`` to native structure."""
+        return OgNativeStructure(lattice=np.asarray(structure.lattice.matrix, dtype=float),
+                               species=[str(s) for s in structure.species],
+                               frac_coords=np.asarray(structure.frac_coords, dtype=float),
+                               pbc=True)
+
+    # Backward-compatibility alias
+    @staticmethod
+    def ase_to_pymatgen(a):
+        """Deprecated: retained for compatibility; returns native structure."""
+        return OgStructure.ase_to_native(a)
+
+    @staticmethod
+    def is_image(a, b) -> bool:
+        """Return True if two sites are periodic images (native minimal check)."""
+        try:
+            af = np.asarray(a.frac_coords)
+            bf = np.asarray(b.frac_coords)
+            return np.allclose((af - bf) % 1.0, 0.0, atol=1e-8)
+        except Exception:
+            return False
 
     @staticmethod
     def pymatgen_to_ase(structure):
-        fc = structure.frac_coords
-        lattice = structure.lattice
-
-        a = Atoms(
+        """Convert a structure (native or pymatgen) to ASE ``Atoms``."""
+        if hasattr(structure, "to_ase_atoms"):
+            return structure.to_ase_atoms()
+        fc = np.asarray(structure.frac_coords, dtype=float)
+        # prefer direct lattice matrix (works for pymatgen)
+        lat = np.asarray(getattr(structure.lattice, "matrix", structure.lattice), dtype=float)
+        return Atoms(
             scaled_positions=fc,
-            numbers=structure.atomic_numbers,
+            numbers=getattr(structure, "atomic_numbers", None) or [int(s.number) for s in structure.species],
             pbc=True,
-            cell=Cell.fromcellpar(
-                [
-                    lattice.a,
-                    lattice.b,
-                    lattice.c,
-                    lattice.alpha,
-                    lattice.beta,
-                    lattice.gamma,
-                ]
-            ),
+            cell=lat,
         )
-
-        return a
 
     def is_transition_metal(self):
         for a in self.structure.atomic_numbers:
@@ -133,26 +211,12 @@ class OgStructure:
         return True
 
     def to_ase(self):
-        fc = self.structure.frac_coords
-        lattice = self.structure.lattice
+        """Return an ASE ``Atoms`` view of this structure (requires ASE)."""
+        return self.structure.to_ase_atoms()
 
-        a = Atoms(
-            scaled_positions=fc,
-            numbers=self.structure.atomic_numbers,
-            pbc=True,
-            cell=Cell.fromcellpar(
-                [
-                    lattice.a,
-                    lattice.b,
-                    lattice.c,
-                    lattice.alpha,
-                    lattice.beta,
-                    lattice.gamma,
-                ]
-            ),
-        )
-
-        return a
+    def to_pymatgen(self):
+        """Return a pymatgen ``Structure`` view of this structure (requires pymatgen)."""
+        return self.structure.to_pymatgen()
 
     def centerXY(self, i):
         sys = self.pymatgen_to_ase(self.structure)
@@ -706,7 +770,17 @@ class OgStructure:
         start = time.time()
         relax_results = relaxer.relax(atoms, verbose=verbose, steps=steps, fmax=fmax)
         end = time.time()
-        self.structure = relax_results["final_structure"]
+        fs = relax_results["final_structure"]
+        if isinstance(fs, OgNativeStructure):
+            self.structure = fs.copy()
+        elif Atoms is not None and isinstance(fs, Atoms):
+            self.structure = self.ase_to_native(fs)
+        elif Structure is not None and isinstance(fs, Structure):
+            self.structure = self.pymatgen_to_native(fs)
+        elif isinstance(fs, OgStructure):
+            self.structure = fs.structure.copy()
+        else:
+            raise TypeError(f"Unsupported relaxer final_structure type: {type(fs)!r}")
         self.total_energy = relax_results["trajectory"].energies[-1]
         self.trajectory = relax_results["trajectory"]
         self.relaxation_time = end - start
