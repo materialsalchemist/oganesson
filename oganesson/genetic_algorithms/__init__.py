@@ -1,22 +1,22 @@
 from ase.io import write
-from ase.ga import get_raw_score
-from ase.ga.data import DataConnection
-from ase.ga.population import Population
-from ase.ga.utilities import closest_distances_generator, CellBounds
-from ase.ga.ofp_comparator import OFPComparator
-from ase.ga.offspring_creator import OperationSelector
-from ase.ga.standardmutations import StrainMutation
-from ase.ga.soft_mutation import SoftMutation
-from ase.ga.cutandsplicepairing import CutAndSplicePairing
+from ase_ga import get_raw_score
+from ase_ga.data import DataConnection
+from ase_ga.population import Population
+from ase_ga.utilities import closest_distances_generator, CellBounds
+from ase_ga.ofp_comparator import OFPComparator
+from ase_ga.offspring_creator import OperationSelector
+from ase_ga.standardmutations import StrainMutation
+from ase_ga.soft_mutation import SoftMutation
+from ase_ga.cutandsplicepairing import CutAndSplicePairing
 from oganesson.genetic_algorithms.particle_mutations import (
     Poor2richPermutation,
     Rich2poorPermutation,
 )
 from ase import Atoms
 from ase.data import atomic_numbers
-from ase.ga.startgenerator import StartGenerator
-from ase.ga.data import PrepareDB
-from ase.ga import set_raw_score
+from ase_ga.startgenerator import StartGenerator
+from ase_ga.data import PrepareDB
+from ase_ga import set_raw_score
 from oganesson.ogstructure import OgStructure
 import os
 from typing import List
