@@ -26,6 +26,7 @@ setup(
     keywords=["ai", "machine learning", 'material science'],
     install_requires=[
         "ase",
+        "ase_ga",
         "pandas",
         "numpy",
         "pymatgen",

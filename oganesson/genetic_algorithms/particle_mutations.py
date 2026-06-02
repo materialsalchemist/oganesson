@@ -1,9 +1,9 @@
 import numpy as np
 from operator import itemgetter
 from oganesson.ogstructure import OgStructure
-from ase.ga.offspring_creator import OffspringCreator
-from ase.ga.utilities import get_distance_matrix
-from ase.ga.particle_mutations import Mutation
+from ase_ga.offspring_creator import OffspringCreator
+from ase_ga.utilities import get_distance_matrix
+from ase_ga.particle_mutations import Mutation
 from ase import Atoms
 
 def get_nndist(atoms, distance_matrix, rmax):
