@@ -1,71 +1,87 @@
-<img src="./assets/logo.svg" width="200px">
+<img src="./assets/logo.svg" width="200px" alt="Oganesson logo">
 
-# Oganesson
+# Oganesson: Python workflows for materials research
 
-`oganesson` (`og` for short) is a python package that enables you to apply artificial intelligence workflows to your material discovery projects.
+Oganesson connects atomistic structure preparation, structural analysis and machine learning in one Python interface. Use it to build candidate materials, convert structures into numerical descriptors, and explore structures and dynamics with machine-learned interatomic potentials.
+
+The central object, `OgStructure`, wraps a pymatgen `Structure` and accepts ASE `Atoms` or a structure file. Basic Python and familiarity with crystal structures are enough to start.
+
+## Choose a workflow
+
+| Research task | Tools | Output |
+| --- | --- | --- |
+| Prepare alloys, defects and surfaces | `substitutions_random()`, `add_interstitial()`, `add_atom_to_surface()` | Candidate geometries for relaxation |
+| Compare structure and diffraction | `get_rdf()`, `xrd()` | Radial distribution functions and simulated XRD patterns |
+| Build inputs for property models | `BACD`, `SymmetryFunctions`, DScribe wrappers | Numerical feature vectors |
+| Relax structures or explore dynamics | `relax()`, `simulate()` | Potential-dependent energies, structures and trajectories |
+| Prepare ion-migration calculations | `generate_neb_images()`, `generate_neb()` | Initial geometries for nudged elastic band (NEB) calculations |
+| Search at fixed composition | `GA` | Candidates ranked using relaxed total energies |
+
+Follow the [materials science tutorial](tutorial.ipynb) from structure preparation and analysis to descriptors, then optional simulation workflows. It explains inputs, output files and scientific interpretation.
 
 ## Installation
 
-`og` requires the installation of the following library:
+Install into an isolated Python environment:
 
-- DGL: https://www.dgl.ai/pages/start.html
+```sh
+python -m pip install oganesson
+```
 
-After installing the above library, you can install `og` using the `pip` command as follows:
+For the tutorial, download or clone this repository and run these commands from its root directory:
 
-`pip install oganesson`
+```sh
+python -m pip install -e .
+python -m pip install jupyterlab matplotlib
+python -m jupyter lab tutorial.ipynb
+```
 
-# Features
+Select a kernel using the same Python environment. Introductory examples build crystals with ASE or use the bundled MoS2 structure; no database account is needed.
 
-`og` is currently under active development. The following features are currently available.
+The dependencies declared in [setup.py](setup.py) include ASE, pymatgen, NumPy, pandas, DIEP, bsym and diffusivity. `OgStructure` imports DIEP even for geometry-only work. Graph-backend requirements depend on the installed DIEP version and potential; the repository does not pin a complete environment.
 
-## Machine learning descriptors
+| Optional workflow | Additional installation |
+| --- | --- |
+| DScribe descriptors | `python -m pip install dscribe` |
+| ROSA descriptors | GPAW and its required datasets |
+| Explicit M3GNet potential | `python -m pip install "oganesson[matgl]"` (use `".[matgl]"` for a local checkout) |
+| Ripple geometry | `python -m pip install sympy` |
 
-`og` will bring together machine learning descriptors for materials and molecules within a unified framework. `og` currently provides the following descriptors:
+## First example: describe a crystal
 
-- The BACD, ROSA and SymmetryFunctions introduced in this [publication](https://doi.org/10.1186/s13321-022-00658-9)
-- Most of the descriptors from [DScribe](https://github.com/SINGROUP/dscribe)
-
-Each descriptor has its own class, which extends the `Descriptors` class in the `oganesson.descriptors` module. Here is an example of how to describe a structure using the `BACD` and `SymmetryFunctions` descriptor classes.
+Build an ideal face-centred cubic Cu primitive cell and calculate a BACD feature vector:
 
 ```python
-from oganesson.descriptors import BACD, SymmetryFunctions
+import numpy as np
+from ase.build import bulk
 from oganesson.ogstructure import OgStructure
+from oganesson.descriptors import BACD
 
-bacd = BACD(OgStructure(file_name='examples/structures/Li3PO4_mp-13725.cif'))
-print(bacd.describe())
-
-sf = SymmetryFunctions(OgStructure(file_name='examples/structures/Li3PO4_mp-13725.cif'))
-print(sf.describe())
+copper = OgStructure(bulk("Cu", "fcc", a=3.6))  # lattice parameter in angstrom
+features = np.asarray(BACD(copper).describe(), dtype=float)
+print("Composition:", copper.structure.composition.reduced_formula)
+print("Volume (angstrom^3):", copper.structure.volume)
+print("Number of features:", features.size)
 ```
 
-## Genetic algorithms
+BACD combines elemental-property statistics, structural quantities and a space-group encoding. The vector is an input to a model, not a prediction of the crystal's measured properties. Supervised learning also requires reference labels and an independent evaluation dataset.
 
-The main purpose of `og` is to make complex artificial intelligence workflows easy to compose. Here is an example: running a genetic search for structures, where the structure optimization is performed using the M3GNET neural network model.
+Load your own file with `OgStructure(file_name="path/to/structure.cif")`. Access pymatgen through `.structure`, or convert to ASE with `.to_ase()`.
 
-```python
-from oganesson.genetic_algorithms import GA
-ga = GA(species=['Na']*4 + ['H']*4)
-for i in range(10):
-    ga.evolve()
-```
+## Interpreting calculation results
 
-## Generation of the diffusion path for NEB calculations
+The current default for relaxation, molecular dynamics and genetic search is `model="diep"`, loading the bundled potential. `model="m3gnet"` explicitly selects the MatGL M3GNet model. Other model strings are passed to the DIEP loader. Record the potential and software versions with your calculation settings.
 
-The most painful part of doing transition state calculations in VASP is in building the images. The following code makes this happen in 2 lines of code. You only need to specify the structure file, and the atomic species you want to diffuse, and OgStructure will generate a folder for each path, and then write the POSCAR image files in each of these folders.
+- Surface and defect routines generate starting configurations. Relax and compare candidates before assigning preferred sites or defect energies.
+- NEB helpers prepare geometries; they do not calculate a converged migration barrier. The tutorial distinguishes interpolation from the automatic helper, which independently relaxes images.
+- `simulate()` runs molecular dynamics with a machine-learned potential. Validate the potential for the chemistry and conditions of interest before interpreting predictions.
+- A genetic search finds low-energy candidates within the chosen composition and search settings. It does not establish a global minimum or stability against competing phases.
 
-In the following example, we explore the possible Li diffusion paths in Li3PO4, given there are 6 Li atoms in the cell.
+Oganesson is under active development. The [tutorial](tutorial.ipynb) identifies implementation-specific behaviour and marks expensive or data-dependent sections as optional.
 
-```python
-from oganesson.ogstructure import OgStructure
-og = OgStructure(file_name='examples/structures/Li3PO4_mp-13725.cif')
-og.generate_neb('Li')
-```
-Note that the default value of `r`, which is 3, is sufficient for lithium systems. However, for the case of larger atoms such as Na, a larger value of `r` would be required.
+## Project information
 
-## Finding a reasonable adsorption site of an atom on a surface
+- [Source code](oganesson/ogstructure.py) and [changes](CHANGELOG.md)
+- [Contribution guide](CONTRIBUTING.rst)
+- [MIT licence](LICENSE)
 
-```python
-from oganesson.ogstructure import OgStructure
-og=OgStructure(file_name='examples/structures/MoS2.vasp')
-og.add_atom_to_surface('Li').structure.to('MoS2_Li.vasp','poscar')
-```
+When reporting results, cite the descriptors, potentials, software and reference data actually used. The original descriptor paper is identified by DOI **10.1186/s13321-022-00658-9**.
