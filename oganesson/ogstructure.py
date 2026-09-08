@@ -9,7 +9,6 @@ import random
 import uuid
 import time
 
-import matplotlib.pyplot as plt
 from ase import Atoms, Atom
 from ase.cell import Cell
 from pymatgen.core import Structure, Element
@@ -18,9 +17,7 @@ from pymatgen.io.cif import CifParser
 from pymatgen.core import Lattice
 from diffusivity.diffusion_coefficients import DiffusionCoefficient
 from ase.io.trajectory import Trajectory
-from pymatgen.analysis.diffraction.xrd import XRDCalculator
 from pymatgen.util.coord import pbc_shortest_vectors
-from sympy import cos, pi, sqrt, sin
 from oganesson.utilities import epsilon
 from oganesson.utilities.constants import F
 from oganesson.utilities.bonds_dictionary import bonds_dictionary
@@ -29,12 +26,39 @@ from oganesson.electron_density.lcao import compute_density, write_cube, write_c
 from ase.constraints import FixAtoms
 from ase import units
 
-try:
-    import matgl
-    from matgl.ext.ase import Relaxer
-    from matgl.ext.ase import MolecularDynamics
-except ModuleNotFoundError:
-    print("og:matgl is not installed.")
+import diep
+
+
+def _load_pes(model: str, this_dir: str):
+    """Load a PES potential and return (potential, Relaxer, MolecularDynamics)
+    matched to whatever backend actually produced it.
+
+    "m3gnet" is an explicit opt-in to matgl's own named M3GNet model. "diep" loads
+    the bundled PES directory, and anything else is treated as a path or model name
+    passed straight to diep's backend-agnostic loader. The returned Relaxer/
+    MolecularDynamics classes are picked by inspecting the loaded potential's own
+    module, so this stays correct whether the resolved model is matgl-native, a
+    DGL-backend diep Potential, or a PyG-backend diep Potential.
+    """
+    if model == "m3gnet":
+        import matgl
+
+        potential = matgl.load_model("M3GNet-MP-2021.2.8-PES")
+    elif model == "diep":
+        potential = diep.load_model(os.path.join(this_dir, "pes_models", "diep_pes"))
+        potential.calc_stresses = True
+    else:
+        potential = diep.load_model(model)
+        potential.calc_stresses = True
+
+    backend = type(potential).__module__
+    if backend.startswith("matgl"):
+        from matgl.ext.ase import MolecularDynamics, Relaxer
+    elif backend.startswith("diep.pyg"):
+        from diep.pyg.ext.ase import MolecularDynamics, Relaxer
+    else:
+        from diep.ext.ase import MolecularDynamics, Relaxer
+    return potential, Relaxer, MolecularDynamics
 
 
 class OgStructure:
@@ -686,17 +710,8 @@ class OgStructure:
     ):
         print("og:Loading PES model:", model)
         this_dir = os.path.abspath(os.path.dirname(__file__))
-        if model == "m3gnet":
-            potential = matgl.load_model("M3GNet-MP-2021.2.8-PES")
-            print("og:Loaded PES model: M3GNET")
-        elif model == "diep":
-            potential = matgl.load_model(this_dir + "/pes_models/diep_pes")
-            print("og:Loaded PES model: DIEP")
-            potential.calc_stresses = True
-        else:
-            potential = matgl.load_model(model)
-            print("og:Loaded PES model:", model)
-            potential.calc_stresses = True
+        potential, Relaxer, _ = _load_pes(model, this_dir)
+        print("og:Loaded PES model:", model)
 
         relaxer = Relaxer(potential=potential, relax_cell=relax_cell)
         atoms = self.pymatgen_to_ase(self.structure)
@@ -850,14 +865,7 @@ class OgStructure:
         append_trajectory=False,
     ):
         this_dir = os.path.abspath(os.path.dirname(__file__))
-        if model == "m3gnet":
-            potential = matgl.load_model("M3GNet-MP-2021.2.8-PES")
-        elif model == "diep":
-            potential = matgl.load_model(this_dir + "/pes_models/diep_pes")
-            potential.calc_stresses = True
-        else:
-            potential = matgl.load_model(model)
-            potential.calc_stresses = True
+        potential, _, MolecularDynamics = _load_pes(model, this_dir)
         print("og:Loaded PES model:", model)
         self.dt = timestep
         if not os.path.isdir("og_lab"):
@@ -898,6 +906,8 @@ class OgStructure:
     def calculate_diffusivity(
         self, calculation_type="tracer", axis="all", ignore_n_images=0
     ):
+        import matplotlib.pyplot as plt
+
         if self.trajectory_file:
             diffusion_coefficients = DiffusionCoefficient(
                 Trajectory(self.trajectory_file),
@@ -945,6 +955,9 @@ class OgStructure:
             print("og:You have to run a simulation first!")
 
     def xrd(self, two_theta_range=(0, 180)):
+        import matplotlib.pyplot as plt
+        from pymatgen.analysis.diffraction.xrd import XRDCalculator
+
         if self.structure_tag is None:
             tag = self.structure.formula
         else:
@@ -1220,6 +1233,7 @@ class OgStructure:
         For 2D materials with checkness > 1, ripples will require the use of the relaxer to ensure good enough atomic positions.
 
         """
+        from sympy import cos, pi, sin, sqrt
 
         if axis == "y":
             self.make_supercell([1, units, 1])

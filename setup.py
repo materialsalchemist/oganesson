@@ -29,9 +29,12 @@ setup(
         "pandas",
         "numpy",
         "pymatgen",
-        "matgl",
+        "diep",
         "bsym",
         #   'gpaw',
         "diffusivity",
     ],
+    extras_require={
+        "matgl": ["matgl"],
+    },
 )
