@@ -314,7 +314,7 @@ def build_basis_all_atoms(symbols, frac_positions):
 def write_cube(filename, rho_flat, cell, grid_shape, atom_syms, atom_cart):
     Nx, Ny, Nz = grid_shape
     a, b, c = cell
-    with open(filename, "w") as f:
+    with open(filename, "w", encoding="utf-8") as f:
         f.write("LCAO periodic initial density\n")
         f.write("Numerical extended-Hückel (Γ-only)\n")
         f.write(f"{len(atom_syms):5d} {0.0:12.6f} {0.0:12.6f} {0.0:12.6f}\n")
