@@ -12,10 +12,8 @@ import time
 from ase import Atoms, Atom
 from ase.cell import Cell
 from pymatgen.core import Structure, Element
-from bsym.interface.pymatgen import unique_structure_substitutions
 from pymatgen.io.cif import CifParser
 from pymatgen.core import Lattice
-from diffusivity.diffusion_coefficients import DiffusionCoefficient
 from ase.io.trajectory import Trajectory
 from pymatgen.util.coord import pbc_shortest_vectors
 from oganesson.utilities import epsilon
@@ -23,10 +21,9 @@ from oganesson.utilities.constants import F
 from oganesson.utilities.bonds_dictionary import bonds_dictionary
 from oganesson.utilities import atomic_data
 from oganesson.electron_density.lcao import compute_density, write_cube, write_chgcar
+from oganesson._native_structure import NativeStructure
 from ase.constraints import FixAtoms
 from ase import units
-
-import diep
 
 
 def _load_pes(model: str, this_dir: str):
@@ -45,9 +42,13 @@ def _load_pes(model: str, this_dir: str):
 
         potential = matgl.load_model("M3GNet-MP-2021.2.8-PES")
     elif model == "diep":
+        import diep
+
         potential = diep.load_model(os.path.join(this_dir, "pes_models", "diep_pes"))
         potential.calc_stresses = True
     else:
+        import diep
+
         potential = diep.load_model(model)
         potential.calc_stresses = True
 
@@ -74,9 +75,10 @@ class OgStructure:
         structure_tag=None,
     ) -> None:
         self.structure_tag = structure_tag
+        self._native: Optional[NativeStructure] = None
         if structure is not None:
             if isinstance(structure, OgStructure):
-                self = structure
+                structure = structure.structure
             if isinstance(structure, str):
                 parser = CifParser.from_str(structure)
                 structure = parser.get_structures()
@@ -90,7 +92,9 @@ class OgStructure:
         elif file_name is not None:
             self.structure = self.ase_to_pymatgen(read(file_name))
 
-        self.structure.sort()
+        s = self.structure
+        s.sort()
+        self.structure = s
 
     def __call__(self):
         return self.structure
@@ -99,7 +103,104 @@ class OgStructure:
         """
         Returns number of atoms in structure.
         """
-        return len(self.structure)
+        return len(self._native.atomic_numbers)
+
+    @property
+    def structure(self) -> Structure:
+        """A genuine pymatgen Structure, freshly built from the native arrays.
+
+        Assigning to this property (``self.structure = a_structure``) re-derives
+        the native arrays from whatever Structure is assigned, which is why
+        mutating methods called on `self.structure` must reassign the result
+        back to `self.structure` to persist (e.g. ``s = self.structure;
+        s.sort(); self.structure = s``) -- a bare ``self.structure.sort()``
+        would sort a throwaway copy and be silently discarded.
+        """
+        if self._native is None:
+            raise AttributeError("OgStructure has no structure assigned")
+        return self._native.to_pymatgen()
+
+    @structure.setter
+    def structure(self, value: Structure) -> None:
+        if not isinstance(value, Structure):
+            raise TypeError(
+                f"OgStructure.structure must be a pymatgen Structure, got {type(value)}"
+            )
+        self._native = NativeStructure.from_pymatgen(value)
+
+    # -- native, pymatgen-shaped reads, computed directly from the native arrays --
+
+    @property
+    def frac_coords(self) -> np.ndarray:
+        return self._native.frac_coords
+
+    @property
+    def cart_coords(self) -> np.ndarray:
+        return self._native.cart_coords
+
+    @property
+    def lattice_matrix(self) -> np.ndarray:
+        return self._native.lattice_matrix
+
+    @property
+    def a(self) -> float:
+        return self._native.cell_lengths_and_angles[0]
+
+    @property
+    def b(self) -> float:
+        return self._native.cell_lengths_and_angles[1]
+
+    @property
+    def c(self) -> float:
+        return self._native.cell_lengths_and_angles[2]
+
+    @property
+    def alpha(self) -> float:
+        return self._native.cell_lengths_and_angles[3]
+
+    @property
+    def beta(self) -> float:
+        return self._native.cell_lengths_and_angles[4]
+
+    @property
+    def gamma(self) -> float:
+        return self._native.cell_lengths_and_angles[5]
+
+    @property
+    def volume(self) -> float:
+        return self._native.volume
+
+    @property
+    def atomic_numbers(self) -> np.ndarray:
+        return self._native.atomic_numbers
+
+    # -- native, ASE-shaped reads, computed directly from the native arrays --
+
+    @property
+    def positions(self) -> np.ndarray:
+        return self._native.cart_coords
+
+    @property
+    def numbers(self) -> np.ndarray:
+        return self._native.atomic_numbers
+
+    @property
+    def symbols(self) -> List[str]:
+        return self._native.symbols
+
+    @property
+    def cell(self) -> Cell:
+        return Cell(self._native.lattice_matrix)
+
+    @property
+    def pbc(self):
+        return self._native.pbc
+
+    def get_cell_lengths_and_angles(self):
+        return self._native.cell_lengths_and_angles
+
+    def get_all_distances(self, mic: bool = True) -> np.ndarray:
+        return self._native.get_all_distances(mic=mic)
 
     @staticmethod
     def db_to_structure(row):
@@ -157,26 +258,7 @@ class OgStructure:
         return True
 
     def to_ase(self):
-        fc = self.structure.frac_coords
-        lattice = self.structure.lattice
-
-        a = Atoms(
-            scaled_positions=fc,
-            numbers=self.structure.atomic_numbers,
-            pbc=True,
-            cell=Cell.fromcellpar(
-                [
-                    lattice.a,
-                    lattice.b,
-                    lattice.c,
-                    lattice.alpha,
-                    lattice.beta,
-                    lattice.gamma,
-                ]
-            ),
-        )
-
-        return a
+        return self._native.to_ase()
 
     def centerXY(self, i):
         sys = self.pymatgen_to_ase(self.structure)
@@ -828,6 +910,8 @@ class OgStructure:
                             f.close()
 
     def substitutions(self, atom_X, atom_X_substitution, atol=0.001):
+        from bsym.interface.pymatgen import unique_structure_substitutions
+
         new_structures = unique_structure_substitutions(
             self.structure, atom_X, atom_X_substitution, atol=atol
         )
@@ -846,9 +930,11 @@ class OgStructure:
             atom_X_s += atom_X_substitution[k] * [k]
 
         random.shuffle(atom_X_s)
-        for iatom in range(len(self.structure)):
-            if self.structure[iatom].specie.symbol == atom_X:
-                self.structure.replace(iatom, Element(atom_X_s.pop()))
+        s = self.structure
+        for iatom in range(len(s)):
+            if s[iatom].specie.symbol == atom_X:
+                s.replace(iatom, Element(atom_X_s.pop()))
+        self.structure = s
         return self
 
     def simulate(
@@ -907,6 +993,7 @@ class OgStructure:
         self, calculation_type="tracer", axis="all", ignore_n_images=0
     ):
         import matplotlib.pyplot as plt
+        from diffusivity.diffusion_coefficients import DiffusionCoefficient
 
         if self.trajectory_file:
             diffusion_coefficients = DiffusionCoefficient(
@@ -1421,11 +1508,13 @@ class OgStructure:
             # First, make sure there are no atoms at the zero position. Otherwise, this will lead to trouble when extending the lattice length along the `axis` direction.
             translation_vector = [0, 0, 0]
             translation_vector[axis_dict[axis]] = 0.1
-            self.structure.translate_sites(
+            s = self.structure
+            s.translate_sites(
                 indices=range(len(self)),
                 vector=translation_vector,
                 frac_coords=False,
             )
+            self.structure = s
             # Enlarge the lattice along fracture axis
             extra_length = 1.3
             lattice_scales = [1, 1, 1]
@@ -1497,11 +1586,13 @@ class OgStructure:
             # First, make sure there are no atoms at the zero position. Otherwise, this will lead to trouble when extending the lattice length along the `axis` direction.
             translation_vector = [0, 0, 0]
             translation_vector[axis_dict[axis]] = 0.1
-            self.structure.translate_sites(
+            s = self.structure
+            s.translate_sites(
                 indices=range(len(self)),
                 vector=translation_vector,
                 frac_coords=False,
             )
+            self.structure = s
             # Enlarge the lattice along fracture axis
             extra_length = 1.3
             lattice_scales = [1, 1, 1]
@@ -1578,11 +1669,13 @@ class OgStructure:
 
             for i in range(steps):
                 # Translate the right endpoint
-                self.structure.translate_sites(
+                s = self.structure
+                s.translate_sites(
                     indices=right_atoms_indices,
                     vector=translation_vector,
                     frac_coords=False,
                 )
+                self.structure = s
                 # Finally, relax
                 self.relax(
                     relax_cell=False,
@@ -1616,11 +1709,13 @@ class OgStructure:
             # First, make sure there are no atoms at the zero position. Otherwise, this will lead to trouble when extending the lattice length along the `axis` direction.
             translation_vector = [0, 0, 0]
             translation_vector[axis_dict[axis]] = 0.1
-            self.structure.translate_sites(
+            s = self.structure
+            s.translate_sites(
                 indices=range(len(self)),
                 vector=translation_vector,
                 frac_coords=False,
             )
+            self.structure = s
             # Enlarge the lattice along fracture axis
             extra_length = 1.3
             lattice_scales = [1, 1, 1]
@@ -1645,11 +1740,13 @@ class OgStructure:
             self.simulate()
             for i in range(steps):
                 # Translate the right endpoint
-                self.structure.translate_sites(
+                s = self.structure
+                s.translate_sites(
                     indices=right_atoms_indices,
                     vector=translation_vector,
                     frac_coords=False,
                 )
+                self.structure = s
                 # Finally, relax
                 self.relax(
                     relax_cell=False,
@@ -1894,17 +1991,15 @@ class OgStructure:
                 p[2][0] / (divisions[2] / 3),
             ]
             print(p)
-            self.structure.append(atom, p)
-            neighbors = self.structure.get_neighbors(self.structure[-1], 2)
+            s = self.structure
+            s.append(atom, p)
+            self.structure = s
+            neighbors = s.get_neighbors(s[-1], 2)
             for n in neighbors:
                 sn = self.get_site_for_neighbor_site(n)
-                if (
-                    self.distance(
-                        self.structure[sn].coords, self.structure[len(self) - 1].coords
-                    )
-                    < threshold
-                ):
-                    self.structure.remove_sites([len(self) - 1])
+                if self.distance(s[sn].coords, s[len(s) - 1].coords) < threshold:
+                    s.remove_sites([len(s) - 1])
+                    self.structure = s
                     return False
         else:
             for ip in range(len(p[0])):
@@ -1913,18 +2008,18 @@ class OgStructure:
                     p[1][ip] / (divisions[1] / 3),
                     p[2][ip] / (divisions[2] / 3),
                 ]
-                self.structure.append(atom, p_min)
-                neighbors = self.structure.get_neighbors(self.structure[-1], 2)
+                s = self.structure
+                s.append(atom, p_min)
+                self.structure = s
+                neighbors = s.get_neighbors(s[-1], 2)
                 for n in neighbors:
                     sn = self.get_site_for_neighbor_site(n)
                     if (
-                        self.distance(
-                            self.structure[sn].coords,
-                            self.structure[len(self) - 1].coords,
-                        )
+                        self.distance(s[sn].coords, s[len(s) - 1].coords)
                         < threshold
                     ):
-                        self.structure.remove_sites([len(self) - 1])
+                        s.remove_sites([len(s) - 1])
+                        self.structure = s
                         return self
         return self
 
