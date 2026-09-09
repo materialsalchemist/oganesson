@@ -168,3 +168,5 @@ og_lab
 design/
 test.py
 triplets.py
+scripts/publish.*
+.claude/
