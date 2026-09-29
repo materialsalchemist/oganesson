@@ -37,5 +37,6 @@ setup(
     ],
     extras_require={
         "matgl": ["matgl"],
+        "md-events": ["ovito>=3.16.1"],
     },
 )

@@ -1,6 +1,20 @@
 ## Changelog
 
 
+### 0.1.49 - 2026-09-29
+
+* Added the `oganesson.md_anomalies` subpackage for anomaly studies in molecular dynamics
+* Triggers: ASE MD observers that perturb a run on schedule and record when they were active:
+  thermostat heat/quench ramps (`HeatRamp`), hot spots (`HotSpot`), tension/compression/shear
+  ramps (`StrainRamp`), recoil cascades with an adaptive timestep (`Recoil`), interstitial pushes
+  (`InterstitialPush`) and restraint release (`ReservoirRelease`); `make_trigger()` builds one from a dict
+* Event detectors (`compute_events()`, `event_masks()`): local melting clusters, foreign crystal
+  phases, surviving vacancies on one or two sublattices, molecule-identity changes, cavitation
+  (largest empty sphere) and surface protrusions, each against a reference taken from the trajectory
+* `RestraintCalculator`: flat-bottom sphere and slab restraints with virial stress, for use with
+  `SumCalculator`
+* New optional extra `md-events` (OVITO) for the PTM and Wigner-Seitz detectors
+
 ### 0.1.47 - 2025-09-12
 
 * Added the passivate() method

@@ -16,6 +16,7 @@ The central object, `OgStructure`, wraps a pymatgen `Structure` and accepts ASE 
 | Relax structures or explore dynamics | `relax()`, `simulate()` | Potential-dependent energies, structures and trajectories |
 | Prepare ion-migration calculations | `generate_neb_images()`, `generate_neb()` | Initial geometries for nudged elastic band (NEB) calculations |
 | Search at fixed composition | `GA` | Candidates ranked using relaxed total energies |
+| Perturb MD runs and detect anomalous events | `oganesson.md_anomalies`: `HeatRamp`, `StrainRamp`, `Recoil`, `compute_events()` | Scheduled perturbations and per-frame event sizes (melting, vacancies, bond breaking, cavitation, surface protrusions) |
 
 Follow the [materials science tutorial](tutorial.ipynb) from structure preparation and analysis to descriptors, then optional simulation workflows. It explains inputs, output files and scientific interpretation.
 
@@ -45,6 +46,7 @@ The dependencies declared in [setup.py](setup.py) include ASE, pymatgen, NumPy, 
 | ROSA descriptors | GPAW and its required datasets |
 | Explicit M3GNet potential | `python -m pip install "oganesson[matgl]"` (use `".[matgl]"` for a local checkout) |
 | Ripple geometry | `python -m pip install sympy` |
+| MD event detectors (PTM, Wigner-Seitz) | `python -m pip install "oganesson[md-events]"` (installs OVITO) |
 
 ## First example: describe a crystal
 
